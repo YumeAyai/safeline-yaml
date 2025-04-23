@@ -1,0 +1,534 @@
+# Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: safeline
+---
+# ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: config
+  namespace: safeline
+data:
+  POSTGRES_USER: safeline-ce
+  IMAGE_PREFIX: swr.cn-east-3.myhuaweicloud.com/chaitin-safeline
+  IMAGE_TAG: latest
+  SAFELINE_DIR: /data/safeline
+  MGT_PORT: "9443"
+---
+# Secret for PostgreSQL password
+apiVersion: v1
+kind: Secret
+metadata:
+  name: secret
+  namespace: safeline
+type: Opaque
+data:
+  POSTGRES_PASSWORD: "c2FmZWxpbmUtY2U="  # base64 encoded password : safeline-ce
+---
+# PersistentVolume (workspace)
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: workspace
+spec:
+  capacity:
+    storage: 5Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: manual
+  hostPath:
+    path: /data/safeline/
+---
+# PersistentVolumeClaim
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: workspace
+  namespace: safeline
+spec:
+  storageClassName: manual
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 5Gi
+  volumeName: workspace
+---
+# PostgreSQL Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: safeline
+spec:
+  selector:
+    app: postgres
+  ports:
+    - protocol: TCP
+      port: 5432
+      targetPort: 5432
+---
+# PostgreSQL Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: safeline
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: swr.cn-east-3.myhuaweicloud.com/chaitin-safeline/safeline-postgres:15.2
+        env:
+          - name: POSTGRES_USER
+            valueFrom:
+              configMapKeyRef:
+                name: config
+                key: POSTGRES_USER
+          - name: POSTGRES_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: secret
+                key: POSTGRES_PASSWORD
+        volumeMounts:
+          - name: localtime
+            mountPath: /etc/localtime
+            readOnly: true
+          - name: workspace
+            mountPath: /var/lib/postgresql/data
+            subPath: resources/postgres/data
+        ports:
+          - containerPort: 5432
+        livenessProbe:
+          exec:
+            command:
+              - pg_isready
+              - -U
+              - safeline-ce
+              - -d
+              - safeline-ce
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          exec:
+            command:
+              - pg_isready
+              - -U
+              - safeline-ce
+              - -d
+              - safeline-ce
+          initialDelaySeconds: 30
+          periodSeconds: 10
+      volumes:
+        - name: localtime
+          hostPath:
+            path: /etc/localtime
+            type: File
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: workspace
+---
+# Management Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: safeline-mgt
+  namespace: safeline
+spec:
+  selector:
+    app: mgt
+  ports:
+    - name: '80'
+      protocol: TCP
+      port: 80
+      targetPort: 80
+    - name: '1443'
+      protocol: TCP
+      port: 1443
+      targetPort: 1443
+---
+# Management Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mgt
+  namespace: safeline
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mgt
+  template:
+    metadata:
+      labels:
+        app: mgt
+    spec:
+      containers:
+      - name: mgt
+        image: swr.cn-east-3.myhuaweicloud.com/chaitin-safeline/safeline-mgt:latest
+        env:
+          - name: MGT_PG
+            value: postgres://safeline-ce:safeline-ce@postgres.safeline.svc.cluster.local/safeline-ce?sslmode=disable
+          - name: POSTGRES_PASSWORD
+            value: safeline-ce
+#            valueFrom:
+#              secretKeyRef:
+#                name: secret
+#                key: POSTGRES_PASSWORD
+        volumeMounts:
+          - name: localtime
+            mountPath: /etc/localtime
+            readOnly: true
+          - name: workspace
+            mountPath: /app/data
+            subPath: resources/mgt
+          - name: workspace
+            mountPath: /app/log/nginx
+            subPath: logs/nginx
+          - name: workspace
+            mountPath: /app/sock
+            subPath: resources/sock
+          - name: runtime-data
+            mountPath: /app/run
+        ports:
+          - containerPort: 1443
+        livenessProbe:
+          httpGet:
+            path: /api/open/health
+            port: 1443
+            scheme: HTTPS
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /api/open/health
+            port: 1443
+            scheme: HTTPS
+          initialDelaySeconds: 30
+          periodSeconds: 10
+      volumes:
+        - name: localtime
+          hostPath:
+            path: /etc/localtime
+            type: File
+        - name: runtime-data
+          emptyDir: {}
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: workspace
+---
+# Detection Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: safeline-detector
+  namespace: safeline
+spec:
+  selector:
+    app: detect
+  ports:
+    - name: '8000'
+      protocol: TCP
+      port: 8000
+      targetPort: 8000
+    - name: '8001'
+      protocol: TCP
+      port: 8001
+      targetPort: 8001
+---
+# Detection Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: detect
+  namespace: safeline
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: detect
+  template:
+    metadata:
+      labels:
+        app: detect
+    spec:
+      containers:
+      - name: detect
+        image: swr.cn-east-3.myhuaweicloud.com/chaitin-safeline/safeline-detector:latest
+        env:
+          - name: LOG_DIR
+            value: /logs/detector
+        volumeMounts:
+          - name: localtime
+            mountPath: /etc/localtime
+            readOnly: true
+          - name: workspace
+            mountPath: /resources/detector
+            subPath: resources/detector
+          - name: workspace
+            mountPath: /logs/detector
+            subPath: logs/detector
+      volumes:
+        - name: localtime
+          hostPath:
+            path: /etc/localtime
+            type: File
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: workspace
+---
+# Tengine Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: tengine
+  namespace: safeline
+spec:
+  selector:
+    app: tengine
+  # ports:
+  #   - protocol: TCP
+  #     port: 80
+  #     targetPort: 80
+  #   - protocol: TCP
+  #     port: 443
+  #     targetPort: 443
+---
+# Tengine Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tengine
+  namespace: safeline
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tengine
+  template:
+    metadata:
+      labels:
+        app: tengine
+    spec:
+      containers:
+      - name: tengine
+        image: swr.cn-east-3.myhuaweicloud.com/chaitin-safeline/safeline-tengine:latest
+        env:
+          - name: TCD_MGT_API
+            value: https://mgt.safeline.svc.cluster.local:1443/api/open/publish/server
+          - name: TCD_SNSERVER
+            value: https://detect.safeline.svc.cluster.local:8000
+        volumeMounts:
+          - name: localtime
+            mountPath: /etc/localtime
+            readOnly: true
+          - name: localresolv
+            mountPath: /etc/resolv.conf
+          - name: workspace
+            mountPath: /etc/nginx
+            subPath: resources/nginx
+          - name: workspace
+            mountPath: /resources/detector
+            subPath: resources/detector
+          - name: workspace
+            mountPath: /resources/chaos
+            subPath: resources/chaos
+          - name: workspace
+            mountPath: /var/log/nginx
+            subPath: logs/nginx
+          - name: workspace
+            mountPath: /usr/local/nginx/cache
+            subPath: resources/cache
+          - name: workspace
+            mountPath: /app/sock
+            subPath: resources/socks
+      volumes:
+        - name: localtime
+          hostPath:
+            path: /etc/localtime
+            type: File
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: workspace
+        - name: localresolv
+          hostPath:
+            path: /etc/resolv.conf
+            type: File
+        - name: localdns
+          hostPath:
+            path: /etc/hosts
+            type: File
+# 句柄限制不知道怎么改
+    # ulimits:
+    #   nofile: 131072
+---
+# Luigi Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: safeline-luigi
+  namespace: safeline
+spec:
+  selector:
+    app: luigi
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+---
+# Luigi Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: luigi
+  namespace: safeline
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: luigi
+  template:
+    metadata:
+      labels:
+        app: luigi
+    spec:
+      containers:
+      - name: luigi
+        image: swr.cn-east-3.myhuaweicloud.com/chaitin-safeline/safeline-luigi:latest
+        env:
+          - name: MGT_IP
+            value: https://mgt.safeline.svc.cluster.local:1443
+          - name: LUIGI_PG
+            value: postgres://safeline-ce:safeline-ce@postgres.safeline.svc.cluster.local/safeline-ce?sslmode=disable
+          - name: POSTGRES_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: secret
+                key: POSTGRES_PASSWORD
+        volumeMounts:
+          - name: localtime
+            mountPath: /etc/localtime
+            readOnly: true
+          - name: workspace
+            mountPath: /app/data
+            subPath: resources/luigi
+      volumes:
+        - name: localtime
+          hostPath:
+            path: /etc/localtime
+            type: File
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: workspace
+---
+# FVM Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: safeline-fvm
+  namespace: safeline
+spec:
+  selector:
+    app: fvm
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+---
+# FVM Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fvm
+  namespace: safeline
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fvm
+  template:
+    metadata:
+      labels:
+        app: fvm
+    spec:
+      containers:
+      - name: fvm
+        image: swr.cn-east-3.myhuaweicloud.com/chaitin-safeline/safeline-fvm:latest
+      volumes:
+        - name: localtime
+          hostPath:
+            path: /etc/localtime
+            type: File
+---
+# CHAOS Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: safeline-chaos
+  namespace: safeline
+spec:
+  selector:
+    app: chaos
+  ports:
+    - name: '8080'
+      protocol: TCP
+      port: 8080
+    - name: '8088'
+      protocol: TCP
+      port: 8088
+      targetPort: 8088
+    - name: '9000'
+      protocol: TCP
+      port: 9000
+---
+# CHAOS Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chaos
+  namespace: safeline
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: chaos
+  template:
+    metadata:
+      labels:
+        app: chaos
+    spec:
+      containers:
+      - name: chaos
+        image: swr.cn-east-3.myhuaweicloud.com/chaitin-safeline/safeline-chaos:latest
+        env:
+          - name: DB_ADDR
+            value: postgres://safeline-ce:safeline-ce@postgres.safeline.svc.cluster.local/safeline-ce?sslmode=disable
+          - name: POSTGRES_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: secret
+                key: POSTGRES_PASSWORD
+        volumeMounts:
+          - name: workspace
+            mountPath: /app/sock
+            subPath: resources/sock
+          - name: workspace
+            mountPath: /app/chaos
+            subPath: resources/chaos
+      volumes:
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: workspace
+---
+
