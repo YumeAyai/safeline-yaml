@@ -1,3 +1,7 @@
+本项目是基于 SafeLine（雷池）WAF 的 Kubernetes 部署练习版本。通过将雷池 WAF 集成到 Kubernetes 环境中，帮助用户快速熟悉容器化部署、Kubernetes 编排以及如何在云原生架构中保护 Web 应用免受攻击。
+
+雷池 WAF 是一款简单易用且效果显著的 Web 应用防火墙（WAF），能够过滤和监控 Web 应用与互联网之间的 HTTP 流量，有效防御 SQL 注入、XSS、命令注入、路径遍历等多种威胁。本练习版本专为学习和研究设计，旨在帮助用户掌握 Kubernetes 技术栈的同时，了解 WAF 的工作原理及其在生产环境中的应用。
+
 ### 免责声明
 
 本项目为开源软件，仅供学习、研究和交流使用，**不得用于生产环境**。开发者已尽可能确保代码的正确性和稳定性，但由于项目中存在大量明文配置、未优化的逻辑以及其他潜在问题，可能会导致不可预见的安全性或功能性问题。
@@ -23,6 +27,10 @@
 - 使用者需遵守所有相关的法律法规，并对自身的使用行为负责。
 
 ---
+
+This project is a Kubernetes deployment practice version based on SafeLine WAF . By integrating SafeLine WAF into a Kubernetes environment, this project helps users quickly become familiar with containerized deployment, Kubernetes orchestration, and how to protect web applications from attacks in a cloud-native architecture.
+
+SafeLine WAF is a simple yet highly effective Web Application Firewall (WAF) that filters and monitors HTTP traffic between web applications and the Internet, effectively defending against threats such as SQL injection, XSS, command injection, path traversal, and more. This practice version is designed for learning and research purposes, aiming to help users master Kubernetes technologies while understanding the principles of WAF and its application in production environments.
 
 ### Disclaimer
 
